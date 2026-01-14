@@ -1,0 +1,115 @@
+---
+title: "Introduction to scMSGNN"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introduction to scMSGNN}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# scMSGNN: Multi-Scale Graph Neural Network for Single Cell Analysis
+
+`scMSGNN` is an R package that implements a deep learning framework for single-cell RNA-seq data analysis. It combines Graph Neural Networks (SIGN architecture) with a Zero-Inflated Negative Binomial (ZINB) autoencoder to perform:
+
+1.  **Denoising**: Recovering true gene expression levels.
+2.  **Imputation**: Filling in dropouts.
+3.  **Embedding**: Learning low-dimensional representations for clustering.
+
+## Installation
+
+```r
+# install.packages("devtools")
+devtools::install_github("YuLab-SMU/scMSGNN")
+```
+
+## Quick Start
+
+We will use the standard PBMC 3k dataset as an example.
+
+```{r setup}
+library(scMSGNN)
+library(Seurat)
+library(ggplot2)
+# library(ggsc) # Optional for advanced plotting
+```
+
+### 1. Load and Preprocess Data
+
+First, we set up a standard Seurat object.
+
+```{r preprocess}
+# Load your data (Example: 10X PBMC data)
+# pbmc.data <- Read10X(data.dir = "path/to/pbmc3k/filtered_gene_bc_matrices/hg19/")
+# pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
+
+# For demonstration, we simulate some data or use a small subset
+pbmc <- Seurat::pbmc_small
+pbmc <- NormalizeData(pbmc)
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+pbmc <- ScaleData(pbmc)
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+```
+
+### 2. Run scMSGNN
+
+The `RunscMSGNN` function handles the entire pipeline:
+1.  Builds a K-Nearest Neighbor (KNN) graph.
+2.  Computes multi-scale diffusion features ($X, AX, A^2X, ...$).
+3.  Trains the ZINB-SIGN model.
+4.  Returns embeddings and denoised data.
+
+```{r run_model, eval=FALSE}
+# Note: Set device="cuda" if you have a GPU
+pbmc <- RunscMSGNN(pbmc, 
+                   k_neighbors = 20, 
+                   sign_k = 2, 
+                   epochs = 50, 
+                   device = "cpu")
+```
+
+### 3. Visualization
+
+Visualize the learned embeddings.
+
+```{r vis, eval=FALSE}
+# Clustering on MSGNN embeddings
+pbmc <- FindNeighbors(pbmc, reduction = "msgnn", dims = 1:30) # Adjust dims based on hidden layer size
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+
+# Plot
+DimPlot(pbmc, reduction = "msgnn", label = TRUE)
+
+# Or use scMSGNN wrapper (requires ggsc)
+# plotCluster(pbmc, reduction = "msgnn")
+```
+
+### 4. Downstream Analysis
+
+You can perform differential expression analysis on the **denoised** data stored in the `MSGNN` assay.
+
+```{r de, eval=FALSE}
+DefaultAssay(pbmc) <- "MSGNN"
+markers <- FindMarkers(pbmc, ident.1 = 0, ident.2 = 1)
+head(markers)
+```
+
+## Technical Details
+
+### The SIGN Architecture
+Scalable Inception Graph Neural Networks (SIGN) pre-compute graph diffusion operators, removing the need for graph sampling during training. This makes `scMSGNN` extremely fast and scalable to large datasets.
+
+### ZINB Loss
+We optimize a Zero-Inflated Negative Binomial loss function to explicitly model the sparsity and over-dispersion characteristic of scRNA-seq data.
+
+$$
+L_{ZINB} = - \log P(X | \mu, \theta, \pi)
+$$
+
+Where $\mu$, $\theta$, and $\pi$ are outputs of the neural network.

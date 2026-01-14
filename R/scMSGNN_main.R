@@ -1,0 +1,160 @@
+#' Run scMSGNN
+#'
+#' Main entry point for running the MSGNN analysis.
+#'
+#' @param object Seurat object
+#' @param features Features to use (default: VariableFeatures)
+#' @param k_neighbors Number of neighbors for graph construction
+#' @param sign_k Number of diffusion steps (SIGN k)
+#' @param hidden_dims Hidden layer dimensions for MLP
+#' @param epochs Number of training epochs
+#' @param lr Learning rate
+#' @param device "cpu" or "cuda"
+#' @param batch_size Batch size for training
+#' @return Seurat object with "msgnn" reduction and denoised data
+#' @export
+RunscMSGNN <- function(object, 
+                       features = NULL,
+                       k_neighbors = 20,
+                       sign_k = 2,
+                       hidden_dims = c(128, 64), # Reduced for demo
+                       epochs = 50,
+                       lr = 0.001,
+                       batch_size = 256,
+                       device = "cpu") {
+  
+  if (is.null(features)) {
+    features <- Seurat::VariableFeatures(object)
+  }
+  if (length(features) == 0) {
+    stop("No VariableFeatures found. Please run FindVariableFeatures first.")
+  }
+  
+  message("Building Graph...")
+  # 1. Build Graph & Normalize
+  # Assuming PCA is already run
+  if (!"pca" %in% names(object@reductions)) {
+    object <- Seurat::RunPCA(object, verbose = FALSE)
+  }
+  
+  norm_adj <- BuildGraph(object, k = k_neighbors)
+  
+  # 2. Prepare Data (Features)
+  # X: Cells x Genes
+  X <- Matrix::t(Seurat::GetAssayData(object, slot = "counts")[features, ])
+  
+  # Convert to Dense for Torch (Warning: Memory usage)
+  # For very large datasets, we might need a custom dataset class
+  X_mat <- as.matrix(X)
+  
+  message("Pre-computing Diffusion Features...")
+  # 3. Pre-compute Diffusion: X, AX, A^2X ...
+  # X is Cells x Genes. A is Cells x Cells.
+  # Diffusion: A * X
+  
+  # Convert to Matrix for multiplication if not already
+  # norm_adj is sparse
+  
+  feature_list <- list(X_mat)
+  current_X <- X_mat
+  
+  for (i in 1:sign_k) {
+    message(sprintf("  Diffusion step %d/%d", i, sign_k))
+    current_X <- norm_adj %*% current_X
+    feature_list[[i + 1]] <- as.matrix(current_X)
+  }
+  
+  # Concatenate features: Cells x (Genes * (k+1))
+  X_concat <- do.call(cbind, feature_list)
+  
+  # 4. Initialize Model
+  input_dim <- ncol(X_concat)
+  output_dim <- ncol(X_mat) # Predict original features
+  
+  if (torch::cuda_is_available() && device == "cuda") {
+    device_obj <- torch::torch_device("cuda")
+  } else {
+    device_obj <- torch::torch_device("cpu")
+  }
+  
+  model <- nn_sign_module(input_dim, hidden_dims)
+  model$set_decoders(tail(hidden_dims, 1), output_dim)
+  model$to(device = device_obj)
+  
+  optimizer <- torch::optim_adam(model$parameters, lr = lr)
+  loss_fn <- nn_zinb_loss()
+  
+  # 5. Training Loop
+  message("Training SIGN Model...")
+  
+  # Convert data to tensor
+  tensor_x <- torch::torch_tensor(X_concat, dtype = torch::torch_float32())
+  tensor_target <- torch::torch_tensor(X_mat, dtype = torch::torch_float32())
+  
+  num_samples <- nrow(X_mat)
+  num_batches <- ceiling(num_samples / batch_size)
+  
+  pb <- utils::txtProgressBar(min = 0, max = epochs, style = 3)
+  
+  for (epoch in 1:epochs) {
+    total_loss <- 0
+    
+    # Shuffle indices
+    indices <- sample(1:num_samples)
+    
+    for (b in 1:num_batches) {
+      start_idx <- (b - 1) * batch_size + 1
+      end_idx <- min(b * batch_size, num_samples)
+      batch_idx <- indices[start_idx:end_idx]
+      
+      batch_x <- tensor_x[batch_idx, ]$to(device = device_obj)
+      batch_target <- tensor_target[batch_idx, ]$to(device = device_obj)
+      
+      optimizer$zero_grad()
+      
+      out <- model(batch_x)
+      
+      loss <- loss_fn(batch_target, out$mean, out$disp, out$pi)
+      
+      loss$backward()
+      optimizer$step()
+      
+      total_loss <- total_loss + loss$item()
+    }
+    
+    utils::setTxtProgressBar(pb, epoch)
+  }
+  close(pb)
+  
+  # 6. Inference (Get Embeddings and Denoised Data)
+  model$eval()
+  with(torch::torch_no_grad(), {
+    full_out <- model(tensor_x$to(device = device_obj))
+    embedding <- as.matrix(full_out$embedding$cpu())
+    denoised <- as.matrix(full_out$mean$cpu())
+  })
+  
+  rownames(embedding) <- colnames(object)
+  colnames(embedding) <- paste0("MSGNN_", 1:ncol(embedding))
+  
+  rownames(denoised) <- colnames(object)
+  colnames(denoised) <- features
+  
+  # 7. Store results in Seurat Object
+  
+  # Add Reduction
+  object[["msgnn"]] <- Seurat::CreateDimReducObject(
+    embeddings = embedding,
+    key = "MSGNN_",
+    assay = Seurat::DefaultAssay(object)
+  )
+  
+  # Add Denoised Data (Optional: as a new Assay)
+  # Transpose back to Genes x Cells
+  denoised_t <- t(denoised)
+  denoised_assay <- Seurat::CreateAssayObject(data = denoised_t)
+  object[["MSGNN"]] <- denoised_assay
+  
+  message("Done.")
+  return(object)
+}
