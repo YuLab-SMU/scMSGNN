@@ -1,0 +1,122 @@
+---
+title: "Interpretable Analysis with scMSGNN"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Interpretable Analysis with scMSGNN}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Interpretable Analysis with scMSGNN
+
+This vignette demonstrates how to incorporate biological prior knowledge (gene pathways) into scMSGNN to perform interpretable representation learning. Unlike standard "black-box" deep learning, **Masked scMSGNN** constrains the neural network connections based on known gene sets, making the learned features directly correspond to biological activities.
+
+## 1. Load Data & Libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(scMSGNN)
+library(Seurat)
+library(ggplot2)
+
+# We will use the small PBMC dataset provided by Seurat
+pbmc <- Seurat::pbmc_small
+```
+
+## 2. Preprocessing
+
+Standard Seurat preprocessing is required to identify variable features.
+
+```{r preprocess}
+pbmc <- NormalizeData(pbmc, verbose = FALSE)
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+pbmc <- ScaleData(pbmc, verbose = FALSE)
+pbmc <- RunPCA(pbmc, verbose = FALSE)
+
+features <- VariableFeatures(pbmc)
+cat("Number of features:", length(features), "\n")
+```
+
+## 3. Define Biological Pathways
+
+In a real analysis, you would load pathways from databases like KEGG, Reactome, or MSigDB (e.g., using the `msigdbr` package). For this demonstration, we manually define a few dummy pathways based on the available features.
+
+```{r pathways}
+# Let's check some available genes
+head(features)
+
+# Create mock pathways
+# In reality, load these from a GMT file
+pathways <- list(
+  "Pathway_A_Immune" = features[1:10],
+  "Pathway_B_Metabolism" = features[11:20],
+  "Pathway_C_CellCycle" = features[21:30],
+  "Pathway_D_Mixed" = features[c(1, 5, 15, 25)]
+)
+
+print(names(pathways))
+```
+
+## 4. Create Pathway Mask
+
+The `CreatePathwayMask` function generates a binary mask matrix. This matrix ensures that the neural network only learns connections defined by the pathways.
+
+*   **Rows**: Pathways (Nodes in the first hidden layer)
+*   **Columns**: Input Features (Genes * (sign_k + 1))
+
+```{r mask}
+# sign_k must match the parameter used in RunscMSGNN later
+sign_k <- 2
+
+mask <- CreatePathwayMask(pathways, features, sign_k = sign_k)
+
+cat("Mask dimensions:", dim(mask), "\n")
+# Rows = 4 (Pathways)
+# Cols = 2000 * (2 + 1) = 6000 (if using all features) or length(features) * 3
+```
+
+## 5. Run Interpretable scMSGNN
+
+We pass the `pathway_mask` to `RunscMSGNN`. 
+
+*   The model automatically sets the size of the first hidden layer to the number of pathways (4 in this case).
+*   The `hidden_dims` parameter now controls the layers *after* the pathway layer.
+
+```{r run, message=FALSE, warning=FALSE}
+# Run the model
+# We use a small number of epochs for demonstration
+pbmc <- RunscMSGNN(pbmc, 
+                   features = features,
+                   k_neighbors = 20,
+                   sign_k = sign_k,
+                   hidden_dims = c(32), # Dense layer after the Pathway layer
+                   pathway_mask = mask,
+                   epochs = 50,
+                   device = "cpu",
+                   batch_size = 32) # Small batch for small data
+```
+
+## 6. Visualization
+
+The model adds a reduction named `msgnn`. We can visualize the cells in this biologically constrained embedding space.
+
+```{r vis, fig.width=6, fig.height=5}
+# Cluster and Plot
+pbmc <- FindNeighbors(pbmc, reduction = "msgnn", dims = 1:20, verbose = FALSE)
+pbmc <- FindClusters(pbmc, resolution = 0.5, verbose = FALSE)
+
+DimPlot(pbmc, reduction = "msgnn", label = TRUE) + 
+  ggtitle("Masked scMSGNN Clustering")
+```
+
+## 7. Downstream Analysis: Pathway Activity
+
+Since the first layer represents pathways, we could potentially extract the activations of this layer to see which pathways are active in which cells (Feature extraction pending implementation of accessor hooks).
+
+For now, the embedding reflects a state space constrained by these biological priors, which is often more robust and interpretable than purely data-driven PCA.

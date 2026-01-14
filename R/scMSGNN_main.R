@@ -9,8 +9,10 @@
 #' @param hidden_dims Hidden layer dimensions for MLP
 #' @param epochs Number of training epochs
 #' @param lr Learning rate
-#' @param device "cpu" or "cuda"
 #' @param batch_size Batch size for training
+#' @param device "cpu" or "cuda"
+#' @param adj_matrix Optional: Custom adjacency matrix (sparse). If provided, skips graph building.
+#' @param pathway_mask Optional: Binary mask matrix [Pathways x (Genes * (sign_k + 1))] for the first layer.
 #' @return Seurat object with "msgnn" reduction and denoised data
 #' @export
 RunscMSGNN <- function(object, 
@@ -21,7 +23,9 @@ RunscMSGNN <- function(object,
                        epochs = 50,
                        lr = 0.001,
                        batch_size = 256,
-                       device = "cpu") {
+                       device = "cpu",
+                       adj_matrix = NULL,
+                       pathway_mask = NULL) {
   
   if (is.null(features)) {
     features <- Seurat::VariableFeatures(object)
@@ -30,14 +34,23 @@ RunscMSGNN <- function(object,
     stop("No VariableFeatures found. Please run FindVariableFeatures first.")
   }
   
-  message("Building Graph...")
   # 1. Build Graph & Normalize
-  # Assuming PCA is already run
-  if (!"pca" %in% names(object@reductions)) {
-    object <- Seurat::RunPCA(object, verbose = FALSE)
+  if (is.null(adj_matrix)) {
+    message("Building Graph...")
+    # Assuming PCA is already run
+    if (!"pca" %in% names(object@reductions)) {
+      object <- Seurat::RunPCA(object, verbose = FALSE)
+    }
+    norm_adj <- BuildGraph(object, k = k_neighbors)
+  } else {
+    message("Using custom adjacency matrix...")
+    # Ensure it's normalized or normalize it?
+    # Let's assume user passes a raw adj and we normalize, or we check.
+    # For safety, let's apply NormalizeDegree if it doesn't look normalized (hard to check cheaply).
+    # Better: Assume user knows what they are doing OR apply normalization.
+    # Let's apply NormalizeDegree which adds Self-Loop and normalizes.
+    norm_adj <- NormalizeDegree(adj_matrix)
   }
-  
-  norm_adj <- BuildGraph(object, k = k_neighbors)
   
   # 2. Prepare Data (Features)
   # X: Cells x Genes
@@ -77,7 +90,19 @@ RunscMSGNN <- function(object,
     device_obj <- torch::torch_device("cpu")
   }
   
-  model <- nn_sign_module(input_dim, hidden_dims)
+  # Handle Pathway Mask if provided
+  mask_tensor <- NULL
+  if (!is.null(pathway_mask)) {
+    # Ensure mask is a matrix
+    pathway_mask <- as.matrix(pathway_mask)
+    # Check dimensions
+    if (ncol(pathway_mask) != input_dim) {
+       stop(sprintf("Pathway mask columns (%d) must match input dimension (%d). Note: input_dim = n_genes * (sign_k + 1)", ncol(pathway_mask), input_dim))
+    }
+    mask_tensor <- torch::torch_tensor(pathway_mask, dtype = torch::torch_float32())$to(device = device_obj)
+  }
+
+  model <- nn_sign_module(input_dim, hidden_dims, pathway_mask = mask_tensor)
   model$set_decoders(tail(hidden_dims, 1), output_dim)
   model$to(device = device_obj)
   
