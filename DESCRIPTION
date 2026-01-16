@@ -10,6 +10,8 @@ Description: Implements the MSGNN algorithm for single-cell RNA-seq data analysi
 License: Artistic-2.0
 Encoding: UTF-8
 LazyData: true
+Depends:
+    R (>= 4.1.0)
 Imports:
     Seurat,
     torch,
@@ -17,7 +19,8 @@ Imports:
     ggplot2,
     ggsc,
     ggtangle,
-    utils
+    utils,
+    fastmatch
 RoxygenNote: 7.3.3
 Suggests: 
     testthat,
