@@ -39,6 +39,7 @@ ensure_tensor.data.frame <- function(x, device = 'cpu', ...){
 }
 
 #' @importFrom torch torch_tensor torch_sparse_coo_tensor torch_long
+#' @importFrom methods as
 #' @method ensure_tensor sparseMatrix
 #' @export
 ensure_tensor.sparseMatrix <- function(x, device = 'cpu', ...){
