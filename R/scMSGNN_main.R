@@ -24,8 +24,11 @@ RunscMSGNN <- function(object,
                        lr = 0.001,
                        batch_size = 256,
                        device = "cpu",
+                       reduction = 'pca',
+                       reduction_dims = 30,
                        adj_matrix = NULL,
-                       pathway_mask = NULL) {
+                       pathway_mask = NULL
+                      ) {
   
   if (is.null(features)) {
     features <- Seurat::VariableFeatures(object)
@@ -41,7 +44,7 @@ RunscMSGNN <- function(object,
     if (!"pca" %in% names(object@reductions)) {
       object <- Seurat::RunPCA(object, verbose = FALSE)
     }
-    norm_adj <- BuildGraph(object, k = k_neighbors)
+    norm_adj <- BuildGraph(object, k = k_neighbors, reduction = reduction, dims = seq(reduction_dims))
   } else {
     message("Using custom adjacency matrix...")
     # Ensure it's normalized or normalize it?
@@ -54,7 +57,7 @@ RunscMSGNN <- function(object,
   
   # 2. Prepare Data (Features)
   # X: Cells x Genes
-  X <- Matrix::t(Seurat::GetAssayData(object, slot = "counts")[features, ])
+  X <- Matrix::t(Seurat::GetAssayData(object, layer = "counts")[features, ])
   
   # Convert to Dense for Torch (Warning: Memory usage)
   # For very large datasets, we might need a custom dataset class
@@ -103,7 +106,7 @@ RunscMSGNN <- function(object,
   }
 
   model <- nn_sign_module(input_dim, hidden_dims, pathway_mask = mask_tensor)
-  model$set_decoders(tail(hidden_dims, 1), output_dim)
+  model$set_decoders(utils::tail(hidden_dims, 1), output_dim)
   model$to(device = device_obj)
   
   optimizer <- torch::optim_adam(model$parameters, lr = lr)
@@ -153,7 +156,7 @@ RunscMSGNN <- function(object,
   
   # 6. Inference (Get Embeddings and Denoised Data)
   model$eval()
-  with(torch::torch_no_grad(), {
+  torch::with_no_grad({
     full_out <- model(tensor_x$to(device = device_obj))
     embedding <- as.matrix(full_out$embedding$cpu())
     denoised <- as.matrix(full_out$mean$cpu())
