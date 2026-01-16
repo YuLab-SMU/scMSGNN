@@ -14,7 +14,7 @@ nn_masked_linear <- torch::nn_module(
   forward = function(x) {
     # Apply mask to weights before linear transformation
     masked_weight <- self$linear$weight * self$mask
-    torch::nn_functional_linear(x, masked_weight, self$linear$bias)
+    torch::nnf_linear(x, masked_weight, self$linear$bias)
   }
 )
 
@@ -70,7 +70,7 @@ nn_sign_module <- torch::nn_module(
       in_d <- h_d
     }
     
-    self$encoder <- torch::nn_sequential(layers)
+    self$encoder <- do.call(torch::nn_sequential, layers)
     
     # ZINB Decoders
     # We need to predict Mean, Disp, Pi for original dimension

@@ -1,13 +1,9 @@
-#' Visualization Wrappers
-#'
 #' @import ggplot2
 #' @import ggsc
 #' @import ggtangle
-NULL
 
-#' Plot Clustering Results
-#' 
-#' Wrapper around ggsc::sc_dim to plot clustering results on MSGNN embedding
+#' @title Plot Clustering Results
+#' @description Wrapper around ggsc::sc_dim to plot clustering results on MSGNN embedding
 #' 
 #' @param object Seurat object
 #' @param reduction Reduction to use (default: "msgnn")

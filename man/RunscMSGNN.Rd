@@ -13,7 +13,11 @@ RunscMSGNN(
   epochs = 50,
   lr = 0.001,
   batch_size = 256,
-  device = "cpu"
+  device = "cpu",
+  reduction = "pca",
+  reduction_dims = 30,
+  adj_matrix = NULL,
+  pathway_mask = NULL
 )
 }
 \arguments{
@@ -34,6 +38,10 @@ RunscMSGNN(
 \item{batch_size}{Batch size for training}
 
 \item{device}{"cpu" or "cuda"}
+
+\item{adj_matrix}{Optional: Custom adjacency matrix (sparse). If provided, skips graph building.}
+
+\item{pathway_mask}{Optional: Binary mask matrix [Pathways x (Genes * (sign_k + 1))] for the first layer.}
 }
 \value{
 Seurat object with "msgnn" reduction and denoised data

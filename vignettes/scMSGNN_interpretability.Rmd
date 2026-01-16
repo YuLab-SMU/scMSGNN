@@ -23,10 +23,11 @@ This vignette demonstrates how to incorporate biological prior knowledge (gene p
 ```{r setup, message=FALSE, warning=FALSE}
 library(scMSGNN)
 library(Seurat)
+library(SeuratObject)
 library(ggplot2)
 
 # We will use the small PBMC dataset provided by Seurat
-pbmc <- Seurat::pbmc_small
+pbmc <- SeuratObject::pbmc_small
 ```
 
 ## 2. Preprocessing
@@ -98,6 +99,7 @@ pbmc <- RunscMSGNN(pbmc,
                    hidden_dims = c(32), # Dense layer after the Pathway layer
                    pathway_mask = mask,
                    epochs = 50,
+		   reduction_dims = 16,
                    device = "cpu",
                    batch_size = 32) # Small batch for small data
 ```

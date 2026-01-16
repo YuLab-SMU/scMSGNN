@@ -2,8 +2,8 @@ Package: scMSGNN
 Type: Package
 Title: Multi-Scale Graph Neural Network for Single Cell Analysis
 Version: 0.2.0
-Authors@R: c(person(given = "Guangchuang", family = "Yu",        email = "guangchuangyu@gmail.com",   role = c("aut", "cre"))，
-             person("Tim", "Ze", email = "wutimze@gmail.com", role = c("aut", "cre"))
+Authors@R: c(person(given = "Guangchuang", family = "Yu",        email = "guangchuangyu@gmail.com",   role = c("aut", "cre")),
+             person("Tim", "Ze", email = "wutimze@gmail.com", role = c("aut"))
             )
 Description: Implements the MSGNN algorithm for single-cell RNA-seq data analysis using torch and Seurat.
     Provides graph-based denoising, clustering, and visualization tools.
@@ -11,20 +11,17 @@ License: Artistic-2.0
 Encoding: UTF-8
 LazyData: true
 Imports:
-    methods,
     Seurat,
     torch,
     Matrix,
     ggplot2,
     ggsc,
     ggtangle,
-    clusterProfiler,
-    magrittr,
-    stats,
     utils
 RoxygenNote: 7.3.3
 Suggests: 
     testthat,
     knitr,
-    rmarkdown
+    rmarkdown,
+    SeuratObject
 VignetteBuilder: knitr
