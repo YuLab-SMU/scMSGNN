@@ -13,7 +13,7 @@ nn_masked_linear <- torch::nn_module(
   
   forward = function(x) {
     # Apply mask to weights before linear transformation
-    masked_weight <- self$linear$weight * self$mask
+    masked_weight <- torch::torch_mul(self$linear$weight, self$mask)
     torch::nnf_linear(x, masked_weight, self$linear$bias)
   }
 )

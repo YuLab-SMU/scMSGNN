@@ -4,10 +4,10 @@
 \alias{CreatePathwayMask}
 \title{Create Pathway Mask from GMT}
 \usage{
-CreatePathwayMask(pathways, features, sign_k)
+CreatePathwayMask(gset.idx.list, features, sign_k)
 }
 \arguments{
-\item{pathways}{List of pathways (e.g., read from GMT) where names are pathway names and values are gene vectors.}
+\item{gset.idx.list}{List of gene sets (e.g., read from GMT) where names are pathway/term names and values are gene vectors.}
 
 \item{features}{Vector of gene names used in the model (must match order of input data).}
 

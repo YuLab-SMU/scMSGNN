@@ -13,6 +13,7 @@
 #' @param device "cpu" or "cuda"
 #' @param adj_matrix Optional: Custom adjacency matrix (sparse). If provided, skips graph building.
 #' @param pathway_mask Optional: Binary mask matrix [Pathways x (Genes * (sign_k + 1))] for the first layer.
+#' @importFrom torch optim_adam torch_index_select
 #' @return Seurat object with "msgnn" reduction and denoised data
 #' @export
 RunscMSGNN <- function(object, 
@@ -36,6 +37,12 @@ RunscMSGNN <- function(object,
   if (length(features) == 0) {
     stop("No VariableFeatures found. Please run FindVariableFeatures first.")
   }
+
+  if (torch::cuda_is_available() && device == "cuda") {
+    device_obj <- torch::torch_device("cuda")
+  } else {
+    device_obj <- torch::torch_device("cpu")
+  }
   
   # 1. Build Graph & Normalize
   if (is.null(adj_matrix)) {
@@ -44,7 +51,7 @@ RunscMSGNN <- function(object,
     if (!"pca" %in% names(object@reductions)) {
       object <- Seurat::RunPCA(object, verbose = FALSE)
     }
-    norm_adj <- BuildGraph(object, k = k_neighbors, reduction = reduction, dims = seq(reduction_dims))
+    adj_matrix <- BuildGraph(object, k = k_neighbors, reduction = reduction, dims = seq(reduction_dims))
   } else {
     message("Using custom adjacency matrix...")
     # Ensure it's normalized or normalize it?
@@ -52,8 +59,11 @@ RunscMSGNN <- function(object,
     # For safety, let's apply NormalizeDegree if it doesn't look normalized (hard to check cheaply).
     # Better: Assume user knows what they are doing OR apply normalization.
     # Let's apply NormalizeDegree which adds Self-Loop and normalizes.
-    norm_adj <- NormalizeDegree(adj_matrix)
+    #norm_adj <- NormalizeDegree(adj_matrix)
   }
+
+  adj_matrix <- ensure_tensor(adj_matrix, device = device_obj)
+  adj_matrix <- normalize_adjacency(adj_matrix, device = device_obj)
   
   # 2. Prepare Data (Features)
   # X: Cells x Genes
@@ -61,7 +71,7 @@ RunscMSGNN <- function(object,
   
   # Convert to Dense for Torch (Warning: Memory usage)
   # For very large datasets, we might need a custom dataset class
-  X_mat <- as.matrix(X)
+  X <- ensure_tensor(X, device = device_obj)
   
   message("Pre-computing Diffusion Features...")
   # 3. Pre-compute Diffusion: X, AX, A^2X ...
@@ -71,41 +81,35 @@ RunscMSGNN <- function(object,
   # Convert to Matrix for multiplication if not already
   # norm_adj is sparse
   
-  feature_list <- list(X_mat)
-  current_X <- X_mat
+  feature_list <- list(X)
+  current_X <- X
   
   for (i in 1:sign_k) {
     message(sprintf("  Diffusion step %d/%d", i, sign_k))
-    current_X <- norm_adj %*% current_X
-    feature_list[[i + 1]] <- as.matrix(current_X)
+    current_X <- torch::torch_matmul(adj_matrix, current_X) 
+    feature_list[[i + 1]] <- current_X
   }
   
   # Concatenate features: Cells x (Genes * (k+1))
-  X_concat <- do.call(cbind, feature_list)
+  X_concat <- do.call(torch::torch_cat, list(feature_list, dim = 2))
+  
   
   # 4. Initialize Model
   input_dim <- ncol(X_concat)
-  output_dim <- ncol(X_mat) # Predict original features
-  
-  if (torch::cuda_is_available() && device == "cuda") {
-    device_obj <- torch::torch_device("cuda")
-  } else {
-    device_obj <- torch::torch_device("cpu")
-  }
+  output_dim <- ncol(X) # Predict original features
   
   # Handle Pathway Mask if provided
   mask_tensor <- NULL
   if (!is.null(pathway_mask)) {
     # Ensure mask is a matrix
-    pathway_mask <- as.matrix(pathway_mask)
+    pathway_mask <- ensure_tensor(pathway_mask, device = device_obj)
     # Check dimensions
     if (ncol(pathway_mask) != input_dim) {
        stop(sprintf("Pathway mask columns (%d) must match input dimension (%d). Note: input_dim = n_genes * (sign_k + 1)", ncol(pathway_mask), input_dim))
     }
-    mask_tensor <- torch::torch_tensor(pathway_mask, dtype = torch::torch_float32())$to(device = device_obj)
   }
 
-  model <- nn_sign_module(input_dim, hidden_dims, pathway_mask = mask_tensor)
+  model <- nn_sign_module(input_dim, hidden_dims, pathway_mask = pathway_mask$to_dense())
   model$set_decoders(utils::tail(hidden_dims, 1), output_dim)
   model$to(device = device_obj)
   
@@ -115,11 +119,7 @@ RunscMSGNN <- function(object,
   # 5. Training Loop
   message("Training SIGN Model...")
   
-  # Convert data to tensor
-  tensor_x <- torch::torch_tensor(X_concat, dtype = torch::torch_float32())
-  tensor_target <- torch::torch_tensor(X_mat, dtype = torch::torch_float32())
-  
-  num_samples <- nrow(X_mat)
+  num_samples <- nrow(X)
   num_batches <- ceiling(num_samples / batch_size)
   
   pb <- utils::txtProgressBar(min = 0, max = epochs, style = 3)
@@ -133,20 +133,21 @@ RunscMSGNN <- function(object,
     for (b in 1:num_batches) {
       start_idx <- (b - 1) * batch_size + 1
       end_idx <- min(b * batch_size, num_samples)
-      batch_idx <- indices[start_idx:end_idx]
+      batch_idx <- indices[seq(start_idx, end_idx)]
+      batch_idx <- torch::torch_tensor(batch_idx, dtype = torch::torch_long())
       
-      batch_x <- tensor_x[batch_idx, ]$to(device = device_obj)
-      batch_target <- tensor_target[batch_idx, ]$to(device = device_obj)
+      batch_x <- torch_index_select(X_concat, 1, batch_idx)
+      batch_target <- torch_index_select(X, 1, batch_idx) 
       
       optimizer$zero_grad()
       
       out <- model(batch_x)
-      
-      loss <- loss_fn(batch_target, out$mean, out$disp, out$pi)
+
+      loss <- loss_fn(batch_target$to_dense(), out$mean, out$disp, out$pi)
       
       loss$backward()
       optimizer$step()
-      
+
       total_loss <- total_loss + loss$item()
     }
     
@@ -157,9 +158,9 @@ RunscMSGNN <- function(object,
   # 6. Inference (Get Embeddings and Denoised Data)
   model$eval()
   torch::with_no_grad({
-    full_out <- model(tensor_x$to(device = device_obj))
-    embedding <- as.matrix(full_out$embedding$cpu())
-    denoised <- as.matrix(full_out$mean$cpu())
+    full_out <- model(X_concat$to(device = device_obj))
+    embedding <- as.matrix(full_out$embedding$to(device = device_obj))
+    denoised <- as.matrix(full_out$mean$to(device = device_obj))
   })
   
   rownames(embedding) <- colnames(object)
@@ -179,9 +180,7 @@ RunscMSGNN <- function(object,
   
   # Add Denoised Data (Optional: as a new Assay)
   # Transpose back to Genes x Cells
-  denoised_t <- t(denoised)
-  denoised_assay <- Seurat::CreateAssayObject(data = denoised_t)
-  object[["MSGNN"]] <- denoised_assay
+  object[["MSGNN"]] <- Seurat::CreateAssayObject(data = Matrix::t(denoised))
   
   message("Done.")
   return(object)
