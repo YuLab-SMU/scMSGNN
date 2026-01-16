@@ -50,7 +50,7 @@ First, we set up a standard Seurat object.
 # pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
 
 # For demonstration, we simulate some data or use a small subset
-pbmc <- Seurat::pbmc_small
+pbmc <- SeuratObject::pbmc_small
 pbmc <- NormalizeData(pbmc)
 pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
 pbmc <- ScaleData(pbmc)
@@ -70,7 +70,8 @@ The `RunscMSGNN` function handles the entire pipeline:
 pbmc <- RunscMSGNN(pbmc, 
                    k_neighbors = 20, 
                    sign_k = 2, 
-                   epochs = 50, 
+                   epochs = 50,
+		   reduction_dims = 16,
                    device = "cpu")
 ```
 

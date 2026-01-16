@@ -4,7 +4,7 @@
 \alias{nn_sign_module}
 \title{SIGN Module}
 \usage{
-nn_sign_module(input_dim, hidden_dims, dropout = 0)
+nn_sign_module(input_dim, hidden_dims, dropout = 0, pathway_mask = NULL)
 }
 \description{
 Multi-scale Graph Neural Network module

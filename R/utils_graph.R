@@ -1,13 +1,11 @@
-#' @importFrom Matrix rowSums Diagonal t
-#' @importFrom Seurat FindNeighbors
-NULL
-
 #' Normalize Adjacency Matrix
 #'
 #' Calculates the normalized Laplacian matrix: D^(-1/2) * (A + I) * D^(-1/2)
 #'
 #' @param adj A sparse adjacency matrix (dgCMatrix)
 #' @return A normalized sparse matrix
+#' @importFrom Matrix rowSums Diagonal t
+#' @importFrom Seurat FindNeighbors
 #' @export
 NormalizeDegree <- function(adj) {
   # 1. A + I (Self loops)
